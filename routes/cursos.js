@@ -1,19 +1,47 @@
-// routes/cursoRoutes.js (EJEMPLO)
-
+// routes/curso.js
 const express = require('express');
 const router = express.Router();
-// Asume que 'authMiddleware' es tu función que verifica el JWT
-const { authMiddleware, checkRole } = require('../middleware/authMiddleware'); 
+
+const { authMiddleware, checkRole } = require('../middleware/authMiddleware');
 const cursoController = require('../controllers/controladorCurso');
 
-router.get('/', cursoController.getAllCursos); 
-router.get('/:id', cursoController.getOneById); 
+// =============================================
+// 🔹 RUTAS PÚBLICAS O SEMI-PÚBLICAS
+// =============================================
 
+// Listar todos los cursos (Admin o Profesor pueden verlos)
+router.get('/', authMiddleware, checkRole(['admin', 'profesor']), cursoController.getAllCursos);
 
-// 🛑 RUTAS PROTEGIDAS (POST, PUT, DELETE): Aquí SÍ DEBE IR authMiddleware.
-router.post('/', authMiddleware, checkRole(['admin', 'profesor']), cursoController.createCurso);
-router.put('/:id', authMiddleware, checkRole(['admin', 'profesor']), cursoController.updateCurso);
-router.delete('/:id', authMiddleware, checkRole(['admin']), cursoController.deleteCurso);
+// Obtener un curso por ID (con populate completo)
+router.get('/:id', authMiddleware, checkRole(['admin', 'profesor']), cursoController.getOneById);
+
+// =============================================
+// 🔹 RUTAS PROTEGIDAS PARA ADMIN / PROFESOR
+// =============================================
+
+// Crear curso (solo Admin)
+router.post(
+  '/',
+  authMiddleware,
+  checkRole(['admin']),
+  cursoController.createCurso
+);
+
+// Actualizar curso (solo Admin)
+router.put(
+  '/:id',
+  authMiddleware,
+  checkRole(['admin']),
+  cursoController.updateCurso
+);
+
+// Eliminar curso (solo Admin)
+router.delete(
+  '/:id',
+  authMiddleware,
+  checkRole(['admin']),
+  cursoController.deleteCurso
+);
 
 module.exports = router;
 

@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const dotenv = require('dotenv');
 const conectarDB = require('./config/db');
-const cors = require('cors'); // ⬅️ 1. Importar el módulo CORS
+const cors = require('cors'); 
 
 // Cargar variables de entorno
 dotenv.config();
@@ -30,23 +30,16 @@ app.use(cors(corsOptions)); // ⬅️ 3. Usar el middleware CORS
 // Middleware para parsear datos (Debe ir después del CORS)
 app.use(express.json());
 
-// Importación de RUTAS
-const authRoutes = require('./routes/autenticacion');
-const usuarioRoutes = require('./routes/usuarios');
-const estudianteRoutes = require('./routes/estudiantes');
-const cursoRoutes = require('./routes/cursos');
-const calificacionRoutes = require('./routes/calificaciones');
-const materiaRoutes = require('./routes/materia');
-const aniosLectivosRoutes = require('./routes/anios-lectivos');
-
 // Uso de Rutas de CRUD y Autenticación
-app.use('/api/autenticacion', authRoutes);
-app.use('/api/usuarios', usuarioRoutes);
-app.use('/api/estudiantes', estudianteRoutes);
-app.use('/api/cursos', cursoRoutes);
-app.use('/api/calificaciones', calificacionRoutes); 
-app.use('/api/materias', materiaRoutes); 
-app.use('/api/anios-lectivos', aniosLectivosRoutes);
+app.use('/api/autenticacion', require('./routes/autenticacion'));
+app.use('/api/usuarios', require('./routes/usuarios'));
+app.use('/api/estudiantes', require('./routes/estudiantes'));
+app.use('/api/cursos', require('./routes/cursos'));
+app.use('/api/calificaciones', require('./routes/calificaciones'));
+app.use('/api/materias', require('./routes/materia')); 
+app.use('/api/anios-lectivos', require('./routes/anios-lectivos'));
+app.use("/api/profesor", require("./routes/profesor"));
+app.use('/api/reportes', require('./routes/reportes'));
 
 
 const errorHandler = require('./middleware/error');

@@ -1,182 +1,234 @@
 // models/Calificacion.js
 const mongoose = require('mongoose');
+const { Schema, model } = mongoose;
 
-/* ===================== CUALITATIVA ===================== */
-const BANDS = Object.freeze([
-  { min: 9.5, max: 10.01, quali: 'A+' },
-  { min: 9.0, max: 9.5,  quali: 'A-' },
-  { min: 8.5, max: 9.0,  quali: 'B+' },
-  { min: 8.0, max: 8.5,  quali: 'B-' },
-  { min: 7.0, max: 8.0,  quali: 'C+' },
-  { min: 6.0, max: 7.0,  quali: 'C-' },
-  { min: 4.0, max: 6.0,  quali: 'D'  },
-  { min: 0.0, max: 4.0,  quali: 'E'  },
-]);
-function cualiFromPromedio(p) {
-  const v = Number(p ?? 0);
-  const band = BANDS.find(b => v >= b.min && v < b.max);
-  return band ? band.quali : '';
-}
+/* ----------------------- Helpers numéricos ----------------------- */
+const clamp01 = (n, min = 0, max = 10) => {
+  const v = Number(n ?? 0);
+  if (Number.isNaN(v)) return 0;
+  return Math.max(min, Math.min(max, v));
+};
 
-/* ===================== SUBESQUEMA TRIMESTRE ===================== */
-const EsquemaNotaTrimestre = new mongoose.Schema({
-  // Ingresados por el profesor:
-  promedioTrimestral:   { type: Number, min: 0, max: 10, default: 0 },
-  faltasJustificadas:   { type: Number, min: 0, default: 0 },
-  faltasInjustificadas: { type: Number, min: 0, default: 0 },
+const toNumberOrNull = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
-  // Autogenerados:
-  calificacionCualitativa: { type: String, enum: ['A+','A-','B+','B-','C+','C-','D','E',''], default: '' },
-  notaCuantitativa:        { type: Number, min: 0, max: 10, default: 0 },
-}, { _id: false });
+/* ------------------- Escala cualitativa (virtual) ------------------- */
+const cualiFromPromedio = (p) => {
+  if (p === null || p === undefined) return '-';
+  const n = Number(p);
+  if (!Number.isFinite(n)) return '-';
+  // Ajusta esta escala a tu institución si hace falta
+  if (n >= 9.50) return 'A+';
+  if (n >= 9.00) return 'A';
+  if (n >= 8.50) return 'B+';
+  if (n >= 8.00) return 'B';
+  if (n >= 7.00) return 'C+';
+  if (n >= 5.00) return 'C';
+  return 'D';
+};
 
-/* ===================== ESQUEMA PRINCIPAL ===================== */
-const EsquemaCalificacion = new mongoose.Schema({
-  estudiante:  { type: mongoose.Schema.Types.ObjectId, ref: 'Estudiante',  required: true },
-  curso:       { type: mongoose.Schema.Types.ObjectId, ref: 'Curso',       required: true },
-  anioLectivo: { type: mongoose.Schema.Types.ObjectId, ref: 'AnioLectivo', required: true },
-  materia:     { type: mongoose.Schema.Types.ObjectId, ref: 'Materia',     required: true },
-
-  T1: { type: EsquemaNotaTrimestre, default: () => ({}) },
-  T2: { type: EsquemaNotaTrimestre, default: () => ({}) },
-  T3: { type: EsquemaNotaTrimestre, default: () => ({}) },
-
-  promedioTrimestralAnual: { type: Number, min: 0, max: 10, default: 0 },
-  evaluacionFinal:         { type: Number, min: 0, max: 10, default: 0 },
-  notaPromocion:           { type: Number, min: 0, max: 10, default: 0 },
-}, {
-  timestamps: true,
-  toJSON: {
-    virtuals: true,
-    transform: (_doc, ret) => {
-      ret.id = ret._id;
-      delete ret.__v;
-      return ret;
-    }
-  }
-});
-
-/* Índice único por estudiante-curso-materia-año (evita duplicados por año) */
-EsquemaCalificacion.index(
-  { estudiante: 1, curso: 1, materia: 1, anioLectivo: 1 },
+/* ----------------------- Subesquema Trimestre ----------------------- */
+const TrimestreSchema = new Schema(
   {
-    unique: true,
-    partialFilterExpression: {
-      estudiante:  { $exists: true },
-      curso:       { $exists: true },
-      materia:     { $exists: true },
-      anioLectivo: { $exists: true },
+    promedioTrimestral: { type: Number, default: null }, // 0–10
+    faltasJustificadas: { type: Number, default: 0 },
+    faltasInjustificadas: { type: Number, default: 0 },
+    asistenciaTotal: { type: Number, default: 0 }, // opcional (días/clases)
+  },
+  { _id: false }
+);
+
+/* --------------------------- Esquema main --------------------------- */
+const CalificacionSchema = new Schema(
+  {
+    estudiante: {
+      type: Schema.Types.ObjectId,
+      ref: 'Estudiante',
+      required: true,
+      index: true,
     },
+    curso: {
+      type: Schema.Types.ObjectId,
+      ref: 'Curso',
+      required: true,
+      index: true,
+    },
+    materia: {
+      type: Schema.Types.ObjectId,
+      ref: 'Materia',
+      required: true,
+      index: true,
+    },
+    anioLectivo: {
+      type: Schema.Types.ObjectId,
+      ref: 'AnioLectivo',
+      required: true,
+      index: true,
+    },
+
+    // Trimestres
+    T1: { type: TrimestreSchema, default: () => ({}) },
+    T2: { type: TrimestreSchema, default: () => ({}) },
+    T3: { type: TrimestreSchema, default: () => ({}) },
+
+    // Derivados / anuales
+    promedioTrimestralAnual: { type: Number, default: null }, // promedio (T1+T2+T3)/#presentes
+    evaluacionFinal: { type: Number, default: null },          // opcional (examen final)
+    notaPromocion: { type: Number, default: null },            // ej. promedio de (anual, final) si aplica
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-/* ===================== HELPERS DE CÁLCULO ===================== */
-function round2(n) {
-  const v = Number(n ?? 0);
-  return Math.round(v * 100) / 100;
-}
+/* -------------- Índice único por identidad de registro -------------- */
+CalificacionSchema.index(
+  { estudiante: 1, curso: 1, materia: 1, anioLectivo: 1 },
+  { unique: true, name: 'uq_calif_est_cur_mat_anio' }
+);
 
-function recomputeTrim(t) {
-  if (!t) return;
-  t.promedioTrimestral = round2(t.promedioTrimestral);
-  t.calificacionCualitativa = cualiFromPromedio(t.promedioTrimestral);
-  t.notaCuantitativa = t.promedioTrimestral; // mismo valor para reportes
-}
+/* ------------------------- Virtual cualitativa ------------------------ */
+CalificacionSchema.virtual('cualitativa').get(function () {
+  return cualiFromPromedio(this.promedioTrimestralAnual);
+});
 
-function recomputeDoc(doc) {
-  ['T1','T2','T3'].forEach(k => recomputeTrim(doc[k]));
+/* ---------------------- Cálculo de derivados ---------------------- */
+function computeDerived(docLike) {
+  // Asegura números en rango 0–10 si están presentes
+  const t1 = toNumberOrNull(docLike?.T1?.promedioTrimestral);
+  const t2 = toNumberOrNull(docLike?.T2?.promedioTrimestral);
+  const t3 = toNumberOrNull(docLike?.T3?.promedioTrimestral);
 
-  const vals = ['T1','T2','T3']
-    .map(k => Number(doc[k]?.promedioTrimestral ?? 0))
-    .filter(v => v > 0);
+  const vals = [];
+  if (t1 !== null) vals.push(clamp01(t1));
+  if (t2 !== null) vals.push(clamp01(t2));
+  if (t3 !== null) vals.push(clamp01(t3));
 
-  doc.promedioTrimestralAnual = vals.length
-    ? round2(vals.reduce((a,b)=>a+b,0) / vals.length)
-    : 0;
-
-  if (doc.promedioTrimestralAnual > 0 && Number(doc.evaluacionFinal) > 0) {
-    const nota = (doc.promedioTrimestralAnual * 0.90) + (Number(doc.evaluacionFinal) * 0.10);
-    doc.notaPromocion = round2(nota);
-  } else {
-    doc.notaPromocion = 0;
+  let promedioTrimestralAnual = null;
+  if (vals.length > 0) {
+    promedioTrimestralAnual = vals.reduce((a, b) => a + b, 0) / vals.length;
   }
+
+  let evaluacionFinal = toNumberOrNull(docLike?.evaluacionFinal);
+  if (evaluacionFinal !== null) evaluacionFinal = clamp01(evaluacionFinal);
+
+  // Regla de ejemplo para notaPromocion:
+  // - Si hay evaluacionFinal: promedio entre anual y final
+  // - Si NO hay evaluacionFinal: igual al promedio anual
+  let notaPromocion = null;
+  if (promedioTrimestralAnual !== null && evaluacionFinal !== null) {
+    notaPromocion = (promedioTrimestralAnual + evaluacionFinal) / 2;
+  } else if (promedioTrimestralAnual !== null) {
+    notaPromocion = promedioTrimestralAnual;
+  }
+
+  return { promedioTrimestralAnual, evaluacionFinal, notaPromocion };
 }
 
-/* ===================== HOOKS ===================== */
-// create/save
-EsquemaCalificacion.pre('save', function(next) {
-  recomputeDoc(this);
+/* ----------------------- Normalización de set ----------------------- */
+function clampTrimestreFields(tri) {
+  if (!tri) return tri;
+  const out = { ...tri };
+  if (out.promedioTrimestral !== undefined && out.promedioTrimestral !== null) {
+    out.promedioTrimestral = clamp01(out.promedioTrimestral);
+  }
+  if (out.faltasJustificadas !== undefined && out.faltasJustificadas !== null) {
+    out.faltasJustificadas = Math.max(0, Number(out.faltasJustificadas || 0));
+  }
+  if (out.faltasInjustificadas !== undefined && out.faltasInjustificadas !== null) {
+    out.faltasInjustificadas = Math.max(0, Number(out.faltasInjustificadas || 0));
+  }
+  if (out.asistenciaTotal !== undefined && out.asistenciaTotal !== null) {
+    out.asistenciaTotal = Math.max(0, Number(out.asistenciaTotal || 0));
+  }
+  return out;
+}
+
+/* ------------------------------ Hooks ------------------------------ */
+// save()
+CalificacionSchema.pre('save', function (next) {
+  // clamp por si vinieron números fuera de rango
+  if (this.T1) this.T1 = clampTrimestreFields(this.T1);
+  if (this.T2) this.T2 = clampTrimestreFields(this.T2);
+  if (this.T3) this.T3 = clampTrimestreFields(this.T3);
+  if (this.evaluacionFinal !== null && this.evaluacionFinal !== undefined) {
+    this.evaluacionFinal = clamp01(this.evaluacionFinal);
+  }
+
+  const d = computeDerived(this);
+  this.promedioTrimestralAnual = d.promedioTrimestralAnual;
+  this.notaPromocion = d.notaPromocion;
   next();
 });
 
-// update con findOneAndUpdate (incluye dot-paths como "T1.promedioTrimestral")
-EsquemaCalificacion.pre('findOneAndUpdate', function(next) {
-  const upd  = this.getUpdate() || {};
+// findOneAndUpdate(), updateOne(), bulkWrite(updateOne)
+CalificacionSchema.pre(['findOneAndUpdate', 'updateOne'], function (next) {
+  const upd = this.getUpdate() || {};
   const $set = upd.$set || {};
 
-  // Normaliza valores numéricos y reconstruye objetos parciales de T1/T2/T3 si vienen con dot-paths
-  const trKeys = ['T1','T2','T3'];
-  for (const k of trKeys) {
-    // Caso objeto completo: $set.T1 = {...}
-    if ($set[k]) {
-      // aseguremos tipos numéricos y recalculamos
-      $set[k].promedioTrimestral   = round2($set[k].promedioTrimestral);
-      $set[k].faltasJustificadas   = Number($set[k].faltasJustificadas ?? 0);
-      $set[k].faltasInjustificadas = Number($set[k].faltasInjustificadas ?? 0);
-      recomputeTrim($set[k]);
-    }
-  }
-
-  // Caso dot-paths: $set["T1.promedioTrimestral"] = 7.45, etc.
-  const dotPaths = Object.keys($set).filter(p => /^T[123]\./.test(p));
-  if (dotPaths.length) {
-    // reconstruye por trimestre
-    const partial = { T1: {}, T2: {}, T3: {} };
-    for (const p of dotPaths) {
-      const [tKey, prop] = p.split('.', 2); // ej "T1", "promedioTrimestral"
-      if (trKeys.includes(tKey) && prop) {
-        partial[tKey][prop] = $set[p];
+  // Normaliza dot-paths que puedan venir desde bulk-trimestre
+  // Ej: "T1.promedioTrimestral": 7.83
+  for (const k of Object.keys($set)) {
+    if (k.startsWith('T1.') || k === 'T1') {
+      // si es objeto completo
+      if (k === 'T1' && typeof $set[k] === 'object') {
+        $set[k] = clampTrimestreFields($set[k]);
       }
+      if (k === 'T1.promedioTrimestral') $set[k] = clamp01($set[k]);
     }
-    // aplica normalización y cálculo a cada t parcial
-    for (const tKey of trKeys) {
-      if (Object.keys(partial[tKey]).length) {
-        const obj = partial[tKey];
-        obj.promedioTrimestral   = round2(obj.promedioTrimestral);
-        obj.faltasJustificadas   = Number(obj.faltasJustificadas ?? 0);
-        obj.faltasInjustificadas = Number(obj.faltasInjustificadas ?? 0);
-        recomputeTrim(obj);
-
-        // escribe de vuelta como dot-paths ya calculados
-        for (const [prop, val] of Object.entries(obj)) {
-          $set[`${tKey}.${prop}`] = val;
-        }
+    if (k.startsWith('T2.') || k === 'T2') {
+      if (k === 'T2' && typeof $set[k] === 'object') {
+        $set[k] = clampTrimestreFields($set[k]);
       }
+      if (k === 'T2.promedioTrimestral') $set[k] = clamp01($set[k]);
+    }
+    if (k.startsWith('T3.') || k === 'T3') {
+      if (k === 'T3' && typeof $set[k] === 'object') {
+        $set[k] = clampTrimestreFields($set[k]);
+      }
+      if (k === 'T3.promedioTrimestral') $set[k] = clamp01($set[k]);
+    }
+    if (k === 'evaluacionFinal') {
+      $set[k] = clamp01($set[k]);
     }
   }
 
-  // Recalcular anual si vienen promedios en el update
-  const getMaybe = (t) =>
-    (typeof $set[`${t}.promedioTrimestral`] !== 'undefined')
-      ? Number($set[`${t}.promedioTrimestral`])
-      : (typeof $set[t]?.promedioTrimestral !== 'undefined'
-          ? Number($set[t].promedioTrimestral)
-          : NaN);
+  // Necesitamos calcular derivados con lo que habrá después de aplicar el update.
+  // Para eso, pedimos el doc actual y "simulamos" el merge.
+  this.model.findOne(this.getQuery()).lean().then((current) => {
+    const snapshot = current ? { ...current } : {};
+    // aplica $set superficialmente (suficiente para nuestros campos)
+    for (const k of Object.keys($set)) {
+      const path = k.split('.');
+      let ref = snapshot;
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        if (typeof ref[key] !== 'object' || ref[key] === null) ref[key] = {};
+        ref = ref[key];
+      }
+      ref[path[path.length - 1]] = $set[k];
+    }
 
-  const t1 = getMaybe('T1');
-  const t2 = getMaybe('T2');
-  const t3 = getMaybe('T3');
-  const vals = [t1, t2, t3].filter(v => !Number.isNaN(v) && v > 0);
-  if (vals.length) {
-    $set.promedioTrimestralAnual = round2(vals.reduce((a,b)=>a+b,0) / vals.length);
-  }
+    const d = computeDerived(snapshot);
+    $set['promedioTrimestralAnual'] = d.promedioTrimestralAnual;
+    $set['notaPromocion'] = d.notaPromocion;
 
-  // asegura opciones
-  upd.$set = $set;
-  this.setUpdate(upd);
-  this.setOptions({ new: true, runValidators: true, setDefaultsOnInsert: true });
-  next();
+    // reinyecta el $set modificado
+    upd.$set = $set;
+    this.setUpdate(upd);
+    next();
+  }).catch(next);
 });
 
-/* ===================== EXPORT ===================== */
-module.exports = mongoose.model('Calificacion', EsquemaCalificacion);
+/* ----------------------- toJSON limpieza mínima ---------------------- */
+CalificacionSchema.methods.toJSON = function () {
+  const { __v, ...obj } = this.toObject({ virtuals: true });
+  return obj;
+};
+
+module.exports = model('Calificacion', CalificacionSchema);

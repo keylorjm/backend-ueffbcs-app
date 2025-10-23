@@ -1,6 +1,7 @@
 // controllers/controladorCalificacion.js
 const mongoose = require('mongoose');
 const Calificacion = require('../models/Calificacion');
+const Curso = require('../models/Curso'); // ← necesario para validar asignación de profesor
 const ErrorResponse = require('../utils/errorResponse');
 
 const isOid = (s) => typeof s === 'string' && mongoose.isValidObjectId(s);
@@ -11,10 +12,25 @@ const clamp01 = (n, min=0, max=10) => {
   return Math.max(min, Math.min(max, v));
 };
 
-/**
+/** ─────────────────────────────────────────────────────────────
+ * Permisos: si el usuario es profesor, debe estar asignado a la materia en ese curso
+ * Admin pasa directo.
+ * ───────────────────────────────────────────────────────────── */
+async function assertProfesorAsignado(reqUser, cursoId, materiaId) {
+  if (reqUser?.rol !== 'profesor') return;
+  const exists = await Curso.exists({
+    _id: cursoId,
+    materias: { $elemMatch: { materia: materiaId, profesor: reqUser.id } }
+  });
+  if (!exists) {
+    throw new ErrorResponse('No autorizado: materia no asignada en este curso', 403);
+  }
+}
+
+/** ─────────────────────────────────────────────────────────────
  * GET /api/calificaciones?cursoId=&anioLectivoId=&materiaId=&trimestre=T1|T2|T3
- * Retorna calificaciones del curso/materia/año (se puede ignorar 'trimestre' para traer todo).
- */
+ * Lista calificaciones. Si viene 'trimestre', retorna solo ese bloque + claves base.
+ * ───────────────────────────────────────────────────────────── */
 exports.listarPorCursoMateriaTrimestre = async (req, res, next) => {
   try {
     const { cursoId, anioLectivoId, materiaId, trimestre } = req.query;
@@ -26,28 +42,47 @@ exports.listarPorCursoMateriaTrimestre = async (req, res, next) => {
       return next(new ErrorResponse('trimestre debe ser T1|T2|T3', 400));
     }
 
-    const rows = await Calificacion.find({
+    // Permiso por asignación (si es profesor)
+    await assertProfesorAsignado(req.user, cursoId, materiaId);
+
+    const docs = await Calificacion.find({
       curso: cursoId,
       anioLectivo: anioLectivoId,
       materia: materiaId,
     })
-      .select({ estudiante: 1, curso: 1, materia: 1, anioLectivo: 1, T1:1, T2:1, T3:1, promedioTrimestralAnual:1, evaluacionFinal:1, notaPromocion:1 })
-      .populate({ path: 'estudiante', select: 'nombre apellido uid' })
+      .select({
+        estudiante: 1, curso: 1, materia: 1, anioLectivo: 1,
+        T1:1, T2:1, T3:1, promedioTrimestralAnual:1, evaluacionFinal:1, notaPromocion:1,
+        cualitativaFinal:1, observacionFinal:1
+      })
+      .populate({ path: 'estudiante', select: 'nombre cedula email uid' })
       .lean();
 
-    // Si se pasó 'trimestre', no filtramos los docs (para no perder anual), pero es útil en el front
-    res.json({ ok: true, data: rows });
+    if (trimestre) {
+      const tri = String(trimestre).toUpperCase();
+      const data = docs.map(d => ({
+        _id: d._id,
+        estudiante: d.estudiante,
+        curso: d.curso,
+        materia: d.materia,
+        anioLectivo: d.anioLectivo,
+        [tri]: d[tri] || null
+      }));
+      return res.json({ ok: true, data, trimestre: tri });
+    }
+
+    return res.json({ ok: true, data: docs });
   } catch (err) { next(err); }
 };
 
-/**
+/** ─────────────────────────────────────────────────────────────
  * POST /api/calificaciones/bulk-trimestre
  * body: {
- *   cursoId, anioLectivoId, materiaId, trimestre, 
+ *   cursoId, anioLectivoId, materiaId, trimestre,
  *   notas:[{estudianteId, promedioTrimestral, faltasJustificadas, faltasInjustificadas}]
  * }
- * - NO se recibe calificacionCualitativa: el modelo la autogenera según promedio.
- */
+ * Usa findOneAndUpdate por fila → dispara hooks del modelo Calificacion.
+ * ───────────────────────────────────────────────────────────── */
 exports.cargarTrimestreBulk = async (req, res, next) => {
   try {
     const { cursoId, anioLectivoId, materiaId, trimestre, notas } = req.body;
@@ -60,36 +95,40 @@ exports.cargarTrimestreBulk = async (req, res, next) => {
       return next(new ErrorResponse('notas debe ser un array con al menos 1 elemento', 400));
     }
 
-    const tri = String(trimestre).toUpperCase();
+    // Permisos (profesor asignado)
+    await assertProfesorAsignado(req.user, cursoId, materiaId);
 
-    const ops = notas.map((n, idx) => {
+    const tri = String(trimestre).toUpperCase();
+    const results = { ok: true, updated: 0, errors: 0, rows: [] };
+
+    for (let idx = 0; idx < notas.length; idx++) {
+      const n = notas[idx];
       const estudianteId = n?.estudianteId;
       if (!isOid(estudianteId)) {
-        throw new ErrorResponse(`estudianteId inválido en fila ${idx + 1}`, 400);
+        results.errors++;
+        results.rows.push({ row: idx + 1, status: 'error', msg: 'estudianteId inválido' });
+        continue;
       }
 
-      // Sanea valores numéricos y rangos (0–10)
       const promedioTrimestral   = clamp01(n?.promedioTrimestral);
       const faltasJustificadas   = Math.max(0, Number(n?.faltasJustificadas ?? 0));
       const faltasInjustificadas = Math.max(0, Number(n?.faltasInjustificadas ?? 0));
 
-      // Actualizamos con dot-paths para disparar el hook de findOneAndUpdate y que el modelo compute cualitativa/cuanti
       const setDoc = {};
       setDoc[`${tri}.promedioTrimestral`]   = promedioTrimestral;
       setDoc[`${tri}.faltasJustificadas`]   = faltasJustificadas;
       setDoc[`${tri}.faltasInjustificadas`] = faltasInjustificadas;
 
-      return {
-        updateOne: {
-          filter: {
+      try {
+        const doc = await Calificacion.findOneAndUpdate(
+          {
             estudiante:  estudianteId,
             curso:       cursoId,
             materia:     materiaId,
             anioLectivo: anioLectivoId,
           },
-          update: {
+          {
             $set: setDoc,
-            // En upsert, fija las claves de identidad (evita cambios futuros indeseados)
             $setOnInsert: {
               estudiante:  estudianteId,
               curso:       cursoId,
@@ -97,20 +136,39 @@ exports.cargarTrimestreBulk = async (req, res, next) => {
               anioLectivo: anioLectivoId,
             },
           },
-          upsert: true,
-        },
-      };
-    });
+          {
+            upsert: true,
+            new: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+          }
+        );
 
-    const result = await Calificacion.bulkWrite(ops, { ordered: false });
-    res.status(200).json({ ok: true, data: result });
+        // hooks del modelo ya recalcularon derivados
+        results.updated++;
+        results.rows.push({
+          row: idx + 1,
+          status: 'ok',
+          estudianteId,
+          tri,
+          promedioTrimestral: doc?.[tri]?.promedioTrimestral ?? promedioTrimestral
+        });
+
+      } catch (e) {
+        results.errors++;
+        results.rows.push({ row: idx + 1, status: 'error', msg: e.message });
+      }
+    }
+
+    return res.status(200).json(results);
   } catch (err) { next(err); }
 };
 
-/**
+/** ─────────────────────────────────────────────────────────────
  * POST /api/calificaciones/final
  * body: { cursoId, anioLectivoId, materiaId, notas:[{estudianteId, evaluacionFinal}] }
- */
+ * Usa findOneAndUpdate por fila → dispara hooks y recalcula derivados.
+ * ───────────────────────────────────────────────────────────── */
 exports.cargarEvaluacionFinal = async (req, res, next) => {
   try {
     const { cursoId, anioLectivoId, materiaId, notas } = req.body;
@@ -122,23 +180,31 @@ exports.cargarEvaluacionFinal = async (req, res, next) => {
       return next(new ErrorResponse('notas debe ser un array con al menos 1 elemento', 400));
     }
 
-    const ops = notas.map((n, idx) => {
-      const estudianteId   = n?.estudianteId;
-      let evaluacionFinal  = Number(n?.evaluacionFinal ?? 0);
-      if (!isOid(estudianteId)) {
-        throw new ErrorResponse(`estudianteId inválido en fila ${idx + 1}`, 400);
-      }
-      evaluacionFinal = clamp01(evaluacionFinal);
+    // Permisos (profesor asignado)
+    await assertProfesorAsignado(req.user, cursoId, materiaId);
 
-      return {
-        updateOne: {
-          filter: {
+    const results = { ok: true, updated: 0, errors: 0, rows: [] };
+
+    for (let idx = 0; idx < notas.length; idx++) {
+      const n = notas[idx];
+      const estudianteId = n?.estudianteId;
+      let evaluacionFinal = clamp01(n?.evaluacionFinal);
+
+      if (!isOid(estudianteId)) {
+        results.errors++;
+        results.rows.push({ row: idx + 1, status: 'error', msg: 'estudianteId inválido' });
+        continue;
+      }
+
+      try {
+        const doc = await Calificacion.findOneAndUpdate(
+          {
             estudiante:  estudianteId,
             curso:       cursoId,
             materia:     materiaId,
             anioLectivo: anioLectivoId,
           },
-          update: {
+          {
             $set: { evaluacionFinal },
             $setOnInsert: {
               estudiante:  estudianteId,
@@ -147,12 +213,32 @@ exports.cargarEvaluacionFinal = async (req, res, next) => {
               anioLectivo: anioLectivoId,
             },
           },
-          upsert: true,
-        },
-      };
-    });
+          {
+            upsert: true,
+            new: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+          }
+        );
 
-    const result = await Calificacion.bulkWrite(ops, { ordered: false });
-    res.status(200).json({ ok: true, data: result });
+        results.updated++;
+        results.rows.push({
+          row: idx + 1,
+          status: 'ok',
+          estudianteId,
+          evaluacionFinal: doc?.evaluacionFinal ?? evaluacionFinal,
+          promedioTrimestralAnual: doc?.promedioTrimestralAnual,
+          notaPromocion: doc?.notaPromocion,
+          cualitativaFinal: doc?.cualitativaFinal,
+          observacionFinal: doc?.observacionFinal,
+        });
+
+      } catch (e) {
+        results.errors++;
+        results.rows.push({ row: idx + 1, status: 'error', msg: e.message });
+      }
+    }
+
+    return res.status(200).json(results);
   } catch (err) { next(err); }
 };
