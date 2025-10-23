@@ -48,6 +48,12 @@ app.use('/api/calificaciones', calificacionRoutes);
 app.use('/api/materias', materiaRoutes); 
 app.use('/api/anios-lectivos', aniosLectivosRoutes);
 
+
+const errorHandler = require('./middleware/error');
+app.use(errorHandler);
+
+
+
 app.get('/', (req, res) => res.send('API de Gestión de Calificaciones en funcionamiento!'));
 
 const PUERTO = process.env.PUERTO || 5000;

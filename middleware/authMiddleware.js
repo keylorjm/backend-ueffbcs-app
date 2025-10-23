@@ -27,6 +27,7 @@ exports.authMiddleware = asyncHandler(async (req, res, next) => {
     req.usuario = {
       id: usuario._id,
       rol: usuario.rol,
+      cedula: usuario.cedula,
       nombre: usuario.nombre,
       email: usuario.email,
     };

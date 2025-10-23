@@ -36,15 +36,16 @@ router.get(
 // /api/usuarios/profesores
 router.get(
   "/profesores",
-  [authMiddleware, checkRole(["admin", "profesor"]), validarCampos],
+  [authMiddleware, checkRole(["admin", "profesor"]), validarCampos], 
   getUsuariosPorRolProfesor
 );
 
 // /api/usuarios (Rutas generales de listado y creación)
 router
   .route("/")
-  .get(authMiddleware, checkRole(["admin", "profesor"]), getUsuarios)
-  .post(authMiddleware, checkRole(["admin"]), crearUsuario); // C: Crear
+  .get(authMiddleware, checkRole(["admin", "profesor"]), getUsuarios)  
+  .post(authMiddleware, checkRole(["admin"]), crearUsuario); 
+  
 
 // /api/usuarios/:id (Rutas específicas por ID)
 router
@@ -52,5 +53,12 @@ router
   .get(authMiddleware, checkRole(["admin"]), getUsuario) // R: Leer Uno
   .put(authMiddleware, checkRole(["admin"]), actualizarUsuario) // U: Actualizar
   .delete(authMiddleware, checkRole(["admin"]), eliminarUsuario); // D: Eliminar
+
+
+const upload = require('../middleware/uploadExcel');
+const { importUsuariosExcel } = require('../controllers/controladorUsuario');
+
+
+router.post('/import-excel', upload.single('file'), importUsuariosExcel);
 
 module.exports = router;

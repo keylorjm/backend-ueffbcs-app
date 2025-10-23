@@ -1,9 +1,9 @@
 // routes/estudiantes.js (MODIFICADO)
-
+const upload = require('../middleware/uploadExcel');
 const { Router } = require('express');
 const { check } = require('express-validator');
 const { validarCampos } = require('../middleware/validar-campos'); 
-const { obtenerEstudiantes, crearEstudiante, actualizarEstudiante, eliminarEstudiante } = require('../controllers/controladorEstudiante');
+const { obtenerEstudiantes, crearEstudiante, actualizarEstudiante, eliminarEstudiante, importarEstudiantesExcel} = require('../controllers/controladorEstudiante');
 
 const router = Router();
 
@@ -29,5 +29,5 @@ router.delete('/:id', [
     check('id', 'No es un ID válido').isMongoId(),
     validarCampos
 ], eliminarEstudiante);
-
+router.post('/import-excel', upload.single('file'), importarEstudiantesExcel);
 module.exports = router;
