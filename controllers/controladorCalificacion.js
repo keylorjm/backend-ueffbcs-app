@@ -75,14 +75,6 @@ exports.listarPorCursoMateriaTrimestre = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-/** ─────────────────────────────────────────────────────────────
- * POST /api/calificaciones/bulk-trimestre
- * body: {
- *   cursoId, anioLectivoId, materiaId, trimestre,
- *   notas:[{estudianteId, promedioTrimestral, faltasJustificadas, faltasInjustificadas}]
- * }
- * Usa findOneAndUpdate por fila → dispara hooks del modelo Calificacion.
- * ───────────────────────────────────────────────────────────── */
 exports.cargarTrimestreBulk = async (req, res, next) => {
   try {
     const { cursoId, anioLectivoId, materiaId, trimestre, notas } = req.body;
@@ -164,11 +156,7 @@ exports.cargarTrimestreBulk = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-/** ─────────────────────────────────────────────────────────────
- * POST /api/calificaciones/final
- * body: { cursoId, anioLectivoId, materiaId, notas:[{estudianteId, evaluacionFinal}] }
- * Usa findOneAndUpdate por fila → dispara hooks y recalcula derivados.
- * ───────────────────────────────────────────────────────────── */
+
 exports.cargarEvaluacionFinal = async (req, res, next) => {
   try {
     const { cursoId, anioLectivoId, materiaId, notas } = req.body;
