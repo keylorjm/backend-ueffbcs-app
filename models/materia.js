@@ -1,35 +1,26 @@
 // models/Materia.js
-const { Schema, model, models } = require('mongoose');
+const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
-const MateriaSchema = new Schema({
-  nombre: {
-    type: String,
-    required: [true, 'El nombre de la materia es obligatorio'],
-    unique: true,
-    trim: true
+const MateriaSchema = new Schema(
+  {
+    nombre: {
+      type: String,
+      required: [true, 'El nombre de la materia es obligatorio'],
+      trim: true,
+      unique: true,
+    },
+    descripcion: { type: String, default: '' },
+    // Profesor asignado por defecto a esta materia
+    profesor: {
+      type: Schema.Types.ObjectId,
+      ref: 'Usuario',
+      required: [true, 'Debe asignarse un profesor a la materia'],
+    },
   },
-  descripcion: {
-    type: String,
-    default: ''
-  },
-  // 🧑‍🏫 Profesor responsable de la materia
-  profesor: {
-    type: Schema.Types.ObjectId,
-    ref: 'Usuario',
-    required: true
-  },
-  estado: {
-    type: Boolean,
-    default: true
-  }
-});
+  { timestamps: true }
+);
 
-// Personaliza la salida JSON (quita __v, cambia _id→uid)
-MateriaSchema.methods.toJSON = function() {
-  const { __v, _id, ...materia } = this.toObject();
-  materia.uid = _id;
-  return materia;
-};
+MateriaSchema.index({ nombre: 1 }, { unique: true });
 
-// 👇 FIX para evitar OverwriteModelError en reinicios o importaciones múltiples
-module.exports = models.Materia || model('Materia', MateriaSchema);
+module.exports = mongoose.model('Materia', MateriaSchema);

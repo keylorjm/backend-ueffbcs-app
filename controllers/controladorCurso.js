@@ -1,134 +1,176 @@
 // controllers/controladorCurso.js
-const mongoose = require('mongoose');
+const { Types } = require('mongoose');
 const Curso = require('../models/Curso');
-const ErrorResponse = require('../utils/errorResponse');
+const asyncHandler = require('../middleware/asyncHandler');
 
-const isOid = (s) => typeof s === 'string' && mongoose.isValidObjectId(s);
+const isOid = (v) => typeof v === 'string' && Types.ObjectId.isValid(v);
 
-exports.getOneById = async (req, res, next) => {
+function sanitizeMaterias(materiasRaw) {
+  if (!Array.isArray(materiasRaw)) return [];
+  const list = [];
+  for (const it of materiasRaw) {
+    const materia = it?.materia?.toString?.() ?? it?.materia ?? '';
+    const profesor = it?.profesor?.toString?.() ?? it?.profesor ?? '';
+    if (isOid(materia) && isOid(profesor)) list.push({ materia, profesor });
+  }
+  // quitar duplicadas por materia
+  const out = [];
+  const seen = new Set();
+  for (const m of list) {
+    const k = String(m.materia);
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(m);
+    }
+  }
+  return out;
+}
+
+// GET /api/cursos
+exports.getAllCursos = asyncHandler(async (_req, res) => {
+  const data = await Curso.find()
+    .populate('anioLectivo', 'nombre')
+    .populate('profesorTutor', 'nombre email')
+    .populate('estudiantes', 'nombre')
+    .populate('materias.materia', 'nombre')        // muestra nombre de materia
+    .populate('materias.profesor', 'nombre email') // y profesor responsable
+    .lean();
+
+  res.json({ ok: true, data });
+});
+
+// GET /api/cursos/:id
+exports.getOneById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
+
+  const curso = await Curso.findById(id)
+    .populate('anioLectivo', 'nombre')
+    .populate('profesorTutor', 'nombre email')
+    .populate('estudiantes', 'nombre')
+    .populate('materias.materia', 'nombre')
+    .populate('materias.profesor', 'nombre email');
+
+  if (!curso) return res.status(404).json({ ok: false, message: 'Curso no encontrado' });
+  res.json({ ok: true, data: curso });
+});
+
+// POST /api/cursos
+exports.createCurso = asyncHandler(async (req, res) => {
+  // Tolerancia de nombres de campo (por si en el front llega mal escrito)
+  const nombre = req.body?.nombre;
+  const anioLectivo = req.body?.anioLectivo ?? req.body?.aniolectivo ?? req.body?.anio_lectivo;
+  const profesorTutor = req.body?.profesorTutor ?? req.body?.profesor_tutor;
+
+  if (!nombre || !String(nombre).trim())
+    return res.status(400).json({ ok: false, message: 'El nombre es obligatorio' });
+
+  if (!isOid(anioLectivo))
+    return res.status(400).json({ ok: false, message: 'anioLectivo inválido' });
+
+  if (!isOid(profesorTutor))
+    return res.status(400).json({ ok: false, message: 'profesorTutor inválido' });
+
+  const estudiantes = Array.isArray(req.body.estudiantes)
+    ? req.body.estudiantes.filter(isOid)
+    : [];
+
+  const materias = sanitizeMaterias(req.body.materias);
+
+  if (materias.length === 0) {
+    return res.status(400).json({
+      ok: false,
+      message: 'Cada materia debe tener materia y profesor válidos',
+    });
+  }
+
   try {
-    const { id } = req.params;
-    if (!isOid(id)) return next(new ErrorResponse(`ID inválido: ${id}`, 400));
+    const created = await Curso.create({
+      nombre: String(nombre).trim(),
+      anioLectivo,
+      profesorTutor,
+      estudiantes,
+      materias,
+    });
 
-    const doc = await Curso.findById(id)
-      .populate('anioLectivo')
-      .populate('profesorTutor', 'nombre correo cedula rol')
-      .populate('estudiantes', 'nombre cedula email')
-      .populate({ path: 'materias.materia', select: 'nombre descripcion' })
-      .populate({ path: 'materias.profesor', select: 'nombre correo cedula rol' });
+    const curso = await Curso.findById(created._id)
+      .populate('anioLectivo', 'nombre')
+      .populate('profesorTutor', 'nombre email')
+      .populate('estudiantes', 'nombre')
+      .populate('materias.materia', 'nombre')
+      .populate('materias.profesor', 'nombre email');
 
-    if (!doc) return next(new ErrorResponse('Curso no encontrado', 404));
-    res.status(200).json({ ok: true, data: doc });
-  } catch (err) { next(err); }
-};
+    res.status(201).json({ ok: true, data: curso });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({
+        ok: false,
+        message: 'Ya existe un curso con ese nombre en el año lectivo seleccionado.',
+      });
+    }
+    throw err;
+  }
+});
 
-exports.getAllCursos = async (req, res, next) => {
+// PUT /api/cursos/:id
+exports.updateCurso = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
+
+  const update = {};
+
+  if (typeof req.body.nombre === 'string' && req.body.nombre.trim())
+    update.nombre = req.body.nombre.trim();
+
+  const rawAL = req.body?.anioLectivo ?? req.body?.aniolectivo ?? req.body?.anio_lectivo;
+  if (isOid(rawAL)) update.anioLectivo = rawAL;
+
+  const rawPT = req.body?.profesorTutor ?? req.body?.profesor_tutor;
+  if (isOid(rawPT)) update.profesorTutor = rawPT;
+
+  if (Array.isArray(req.body.estudiantes))
+    update.estudiantes = req.body.estudiantes.filter(isOid);
+
+  if (Array.isArray(req.body.materias)) {
+    const materias = sanitizeMaterias(req.body.materias);
+    if (materias.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Cada materia debe tener materia y profesor válidos',
+      });
+    }
+    update.materias = materias;
+  }
+
   try {
-    const { profesorId } = req.query;
-    const filtro = {};
+    const curso = await Curso.findByIdAndUpdate(id, update, { new: true, runValidators: true })
+      .populate('anioLectivo', 'nombre')
+      .populate('profesorTutor', 'nombre email')
+      .populate('estudiantes', 'nombre')
+      .populate('materias.materia', 'nombre')
+      .populate('materias.profesor', 'nombre email');
 
-    // Si quieres que un profesor vea los cursos donde tiene al menos UNA materia asignada:
-    if (profesorId && isOid(profesorId)) {
-      filtro['materias.profesor'] = profesorId;
+    if (!curso) return res.status(404).json({ ok: false, message: 'Curso no encontrado' });
+
+    res.json({ ok: true, data: curso });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({
+        ok: false,
+        message: 'Ya existe un curso con ese nombre en el año lectivo seleccionado.',
+      });
     }
+    throw err;
+  }
+});
 
-    const cursos = await Curso.find(filtro)
-      .populate('anioLectivo')
-      .populate('profesorTutor', 'nombre correo cedula rol')
-      .populate('estudiantes', 'nombre cedula email')
-      .populate({ path: 'materias.materia', select: 'nombre descripcion' })
-      .populate({ path: 'materias.profesor', select: 'nombre correo cedula rol' })
-      .sort({ nombre: 1 })
-      .lean();
+// DELETE /api/cursos/:id
+exports.deleteCurso = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
 
-    res.status(200).json({ ok: true, cursos });
-  } catch (err) { next(err); }
-};
+  const curso = await Curso.findByIdAndDelete(id);
+  if (!curso) return res.status(404).json({ ok: false, message: 'Curso no encontrado' });
 
-exports.createCurso = async (req, res, next) => {
-  try {
-    const { nombre, anioLectivo, profesorTutor, estudiantes, materias } = req.body;
-
-    if (!nombre) return next(new ErrorResponse('Falta nombre', 400));
-    if (!isOid(anioLectivo)) return next(new ErrorResponse('anioLectivo inválido', 400));
-    if (!isOid(profesorTutor)) return next(new ErrorResponse('profesorTutor inválido', 400));
-    if (!Array.isArray(estudiantes) || estudiantes.length === 0) {
-      return next(new ErrorResponse('Debe seleccionar al menos un estudiante', 400));
-    }
-    if (!Array.isArray(materias) || materias.length === 0) {
-      return next(new ErrorResponse('Debe seleccionar al menos una materia', 400));
-    }
-    // Validar cada materia asignada
-    for (const m of materias) {
-      if (!isOid(m?.materia) || !isOid(m?.profesor)) {
-        return next(new ErrorResponse('Cada materia debe tener materia y profesor válidos', 400));
-      }
-    }
-    // Validar cada estudiante
-    for (const e of estudiantes) {
-      if (!isOid(e)) return next(new ErrorResponse('Algún estudiante tiene ID inválido', 400));
-    }
-
-    const nuevo = await Curso.create({ nombre, anioLectivo, profesorTutor, estudiantes, materias });
-
-    const curso = await Curso.findById(nuevo._id)
-      .populate('anioLectivo')
-      .populate('profesorTutor', 'nombre correo cedula rol')
-      .populate('estudiantes', 'nombre cedula email')
-      .populate({ path: 'materias.materia', select: 'nombre descripcion' })
-      .populate({ path: 'materias.profesor', select: 'nombre correo cedula rol' })
-      .lean();
-
-    res.status(201).json({ ok: true, curso });
-  } catch (err) { next(err); }
-};
-
-exports.updateCurso = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!isOid(id)) return next(new ErrorResponse(`ID inválido: ${id}`, 400));
-
-    const { nombre, anioLectivo, profesorTutor, estudiantes, materias } = req.body;
-
-    // Validaciones opcionales si vienen campos
-    if (anioLectivo && !isOid(anioLectivo)) return next(new ErrorResponse('anioLectivo inválido', 400));
-    if (profesorTutor && !isOid(profesorTutor)) return next(new ErrorResponse('profesorTutor inválido', 400));
-    if (Array.isArray(estudiantes)) {
-      for (const e of estudiantes) {
-        if (!isOid(e)) return next(new ErrorResponse('Algún estudiante tiene ID inválido', 400));
-      }
-    }
-    if (Array.isArray(materias)) {
-      for (const m of materias) {
-        if (!isOid(m?.materia) || !isOid(m?.profesor)) {
-          return next(new ErrorResponse('Cada materia debe tener materia y profesor válidos', 400));
-        }
-      }
-    }
-
-    const curso = await Curso.findByIdAndUpdate(
-      id,
-      { $set: { nombre, anioLectivo, profesorTutor, estudiantes, materias } },
-      { new: true, runValidators: true }
-    )
-      .populate('anioLectivo')
-      .populate('profesorTutor', 'nombre correo cedula rol')
-      .populate('estudiantes', 'nombre cedula email')
-      .populate({ path: 'materias.materia', select: 'nombre descripcion' })
-      .populate({ path: 'materias.profesor', select: 'nombre correo cedula rol' })
-      .lean();
-
-    if (!curso) return next(new ErrorResponse(`No se encontró curso con ID ${id}`, 404));
-    res.status(200).json({ ok: true, curso });
-  } catch (err) { next(err); }
-};
-
-exports.deleteCurso = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!isOid(id)) return next(new ErrorResponse(`ID inválido: ${id}`, 400));
-    const curso = await Curso.findByIdAndDelete(id).lean();
-    if (!curso) return next(new ErrorResponse(`No se encontró curso con ID ${id}`, 404));
-    res.status(200).json({ ok: true, data: {} });
-  } catch (err) { next(err); }
-};
+  res.json({ ok: true, message: 'Curso eliminado' });
+});

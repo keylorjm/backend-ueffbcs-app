@@ -1,150 +1,90 @@
-const { request, response } = require("express");
-const Materia = require("../models/materia");
+// controllers/materia.controller.js
+const { Types } = require('mongoose');
+const Materia = require('../models/Materia');
+const asyncHandler = require('../middleware/asyncHandler');
 
-// -------------------------------------------------------------
-// 1. OBTENER TODAS LAS MATERIAS (GET con POPULATE)
-// -------------------------------------------------------------
-const obtenerMaterias = async (req = request, res = response) => {
-    const limite = Number(req.query.limite) || 10;
-    const desde = Number(req.query.desde) || 0;
+const isOid = (v) => typeof v === 'string' && Types.ObjectId.isValid(v);
 
-    try {
-        const [total, materias] = await Promise.all([
-            // Contar solo las materias con estado: true
-            Materia.countDocuments({ estado: true }),
-            
-            Materia.find({ estado: true })
-                // 🛑 CRÍTICO: Trae el objeto del profesor y solo el campo 'nombre'
-                .populate('profesor', 'nombre') 
-                .skip(desde)
-                .limit(limite),
-        ]);
+exports.listar = asyncHandler(async (_req, res) => {
+  const materias = await Materia.find()
+    .populate('profesor', 'nombre correo')
+    .lean();
+  res.json({ ok: true, materias });
+});
 
-        res.json({
-            ok: true,
-            total,
-            materias,
-        });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            ok: false,
-            msg: "Error al obtener las materias.",
-        });
+exports.obtener = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
+
+  const materia = await Materia.findById(id)
+    .populate('profesor', 'nombre correo');
+
+  if (!materia) return res.status(404).json({ ok: false, message: 'Materia no encontrada' });
+  res.json({ ok: true, materia });
+});
+
+exports.crear = asyncHandler(async (req, res) => {
+  const { nombre, descripcion = '', profesor } = req.body;
+
+  if (!nombre || !String(nombre).trim())
+    return res.status(400).json({ ok: false, message: 'El nombre es obligatorio' });
+
+  if (!isOid(profesor))
+    return res.status(400).json({ ok: false, message: 'profesor inválido' });
+
+  try {
+    const created = await Materia.create({
+      nombre: String(nombre).trim(),
+      descripcion: String(descripcion || ''),
+      profesor,
+    });
+
+    const materia = await Materia.findById(created._id)
+      .populate('profesor', 'nombre correo');
+
+    res.status(201).json({ ok: true, materia });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ ok: false, message: 'Ya existe una materia con ese nombre' });
     }
-};
+    throw err;
+  }
+});
 
-// -------------------------------------------------------------
-// 2. CREAR MATERIA (POST)
-// -------------------------------------------------------------
-const crearMateria = async (req = request, res = response) => {
-    // Campos requeridos: nombre, descripcion, y el UID del profesor (que viene del frontend)
-    const { nombre, descripcion, profesor } = req.body; 
+exports.actualizar = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
 
-    try {
-        let materia = await Materia.findOne({ nombre });
+  const update = {};
+  if (typeof req.body.nombre === 'string' && req.body.nombre.trim())
+    update.nombre = req.body.nombre.trim();
 
-        if (materia) {
-            return res.status(400).json({
-                ok: false,
-                msg: `La materia ${nombre} ya existe.`,
-            });
-        }
+  if (typeof req.body.descripcion === 'string')
+    update.descripcion = req.body.descripcion;
 
-        // Crear y guardar en DB
-        materia = new Materia({ nombre, descripcion, profesor });
-        await materia.save();
-        
-        // Opcional: Popular la materia antes de responder para que el frontend reciba el nombre del profesor
-        await materia.populate('profesor', 'nombre'); 
+  if (isOid(req.body.profesor))
+    update.profesor = req.body.profesor;
 
-        res.status(201).json({
-            ok: true,
-            materia,
-        });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            ok: false,
-            msg: "Error al crear la materia. Revise que el ID de profesor sea válido.",
-        });
+  try {
+    const materia = await Materia.findByIdAndUpdate(id, update, { new: true, runValidators: true })
+      .populate('profesor', 'nombre correo');
+
+    if (!materia) return res.status(404).json({ ok: false, message: 'Materia no encontrada' });
+    res.json({ ok: true, materia });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({ ok: false, message: 'Ya existe una materia con ese nombre' });
     }
-};
+    throw err;
+  }
+});
 
-// -------------------------------------------------------------
-// 3. ACTUALIZAR MATERIA (PUT)
-// -------------------------------------------------------------
-const actualizarMateria = async (req = request, res = response) => {
-    const { id } = req.params;
-    // Evitar que se actualicen campos internos como _id o estado
-    const { _id, estado, ...resto } = req.body; 
+exports.eliminar = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!isOid(id)) return res.status(400).json({ ok: false, message: 'ID inválido' });
 
-    try {
-        const materia = await Materia.findByIdAndUpdate(id, resto, {
-            new: true, // Devuelve el nuevo documento actualizado
-        });
+  const materia = await Materia.findByIdAndDelete(id);
+  if (!materia) return res.status(404).json({ ok: false, message: 'Materia no encontrada' });
 
-        if (!materia) {
-            return res.status(404).json({
-                ok: false,
-                msg: "Materia no encontrada para actualizar.",
-            });
-        }
-        
-        // Asegurar que la respuesta devuelva el profesor populado
-        await materia.populate('profesor', 'nombre');
-
-        res.json({
-            ok: true,
-            materia,
-        });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            ok: false,
-            msg: "Error al actualizar la materia.",
-        });
-    }
-};
-
-// -------------------------------------------------------------
-// 4. ELIMINAR MATERIA (DELETE - lógico)
-// -------------------------------------------------------------
-const eliminarMateria = async (req = request, res = response) => {
-    const { id } = req.params;
-
-    try {
-        // Eliminación lógica: cambia estado a false
-        const materiaEliminada = await Materia.findByIdAndUpdate(
-            id,
-            { estado: false },
-            { new: true }
-        );
-
-        if (!materiaEliminada) {
-            return res.status(404).json({
-                ok: false,
-                msg: "Materia no encontrada para eliminar.",
-            });
-        }
-
-        res.json({
-            ok: true,
-            msg: "Materia eliminada lógicamente.",
-            materia: materiaEliminada,
-        });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            ok: false,
-            msg: "Error al eliminar la materia.",
-        });
-    }
-};
-
-module.exports = {
-    obtenerMaterias,
-    crearMateria,
-    actualizarMateria,
-    eliminarMateria,
-};
+  res.json({ ok: true, message: 'Materia eliminada' });
+});
