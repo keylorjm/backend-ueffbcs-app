@@ -1,11 +1,12 @@
-const express = require("express");
+// routes/reportes.js
+const express = require('express');
 const router = express.Router();
-const reporteCtrl = require("../controllers/controladorReporte");
-const { authMiddleware, checkRole } = require("../middleware/authMiddleware");
 
-// Solo administradores y profesores pueden generar reportes
-router.get("/trimestre", authMiddleware, checkRole(["admin", "profesor"]), reporteCtrl.reporteTrimestral);
-router.get("/final", authMiddleware, checkRole(["admin", "profesor"]), reporteCtrl.reporteFinal);
+const { authMiddleware, checkRole } = require('../middleware/authMiddleware');
+const ctrl = require('../controllers/controladorReporte');
+
+router.get('/trimestral', authMiddleware, checkRole(['admin','profesor']), ctrl.reporteTrimestral);
+router.get('/final',      authMiddleware, checkRole(['admin','profesor']), ctrl.reporteFinalAnual);
 
 module.exports = router;
 

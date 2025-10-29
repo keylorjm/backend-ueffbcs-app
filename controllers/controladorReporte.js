@@ -1,194 +1,108 @@
-// controllers/controladorReporte.js
-const mongoose = require("mongoose");
-const Calificacion = require("../models/Calificacion");
-const Curso = require("../models/Curso");
-const Estudiante = require("../models/Estudiante");
-const AnioLectivo = require("../models/AnioLectivo");
-const Materia = require("../models/Materia");
-const ErrorResponse = require("../utils/errorResponse");
+// controllers/reportesController.js
+const Calificacion = require('../models/Calificacion');
+const Asistencia   = require('../models/Asistencia');
 
-const isOid = (id) => typeof id === "string" && mongoose.isValidObjectId(id);
-const isTri = (t) => ["T1", "T2", "T3"].includes(String(t || "").toUpperCase());
+const isValidTri = (t) => ['T1','T2','T3'].includes(t);
 
-/**
- * -----------------------------------------------------
- * 📘 GET /api/reportes/trimestre
- * Parámetros: cursoId, anioLectivoId, materiaId, trimestre
- * Devuelve las notas de los estudiantes en esa materia y trimestre.
- * -----------------------------------------------------
- */
-exports.reporteTrimestral = async (req, res, next) => {
+exports.reporteTrimestral = async (req, res) => {
   try {
     const { cursoId, anioLectivoId, materiaId, trimestre } = req.query;
-
-    if (!isOid(cursoId)) return next(new ErrorResponse("cursoId inválido", 400));
-    if (!isOid(anioLectivoId))
-      return next(new ErrorResponse("anioLectivoId inválido", 400));
-    if (!isOid(materiaId))
-      return next(new ErrorResponse("materiaId inválido", 400));
-    if (!isTri(trimestre))
-      return next(new ErrorResponse("trimestre debe ser T1|T2|T3", 400));
-
-    const tri = String(trimestre).toUpperCase();
-
-    const curso = await Curso.findById(cursoId)
-      .populate("profesorTutor", "nombre apellido correo")
-      .populate("materias", "nombre")
-      .lean();
-    const materia = await Materia.findById(materiaId)
-      .populate("profesor", "nombre apellido correo")
-      .lean();
-    const anio = await AnioLectivo.findById(anioLectivoId).lean();
-
-    if (!curso || !materia || !anio) {
-      return next(new ErrorResponse("Datos del curso o materia no encontrados", 404));
+    if (!cursoId || !anioLectivoId || !materiaId || !isValidTri(trimestre)) {
+      return res.status(400).json({ message: 'Parámetros inválidos' });
     }
 
-    const rows = await Calificacion.find({
-      curso: cursoId,
-      materia: materiaId,
-      anioLectivo: anioLectivoId,
-    })
-      .populate("estudiante", "nombre apellido cedula")
-      .lean();
+    // Fetch en paralelo
+    const [califs, asists] = await Promise.all([
+      Calificacion.find({ curso: cursoId, anioLectivo: anioLectivoId, materia: materiaId })
+        .select(`estudiante ${trimestre}.promedioTrimestral`)
+        .populate('estudiante', 'nombre email')
+        .lean(),
+      Asistencia.find({ curso: cursoId, anioLectivo: anioLectivoId, materia: materiaId })
+        .select(`estudiante ${trimestre}.faltasJustificadas ${trimestre}.faltasInjustificadas ${trimestre}.diasLaborados`)
+        .lean(),
+    ]);
 
-    const data = rows.map((r) => ({
-      estudiante: r.estudiante,
-      promedioTrimestral: r[tri]?.promedioTrimestral ?? null,
-      faltasJustificadas: r[tri]?.faltasJustificadas ?? 0,
-      faltasInjustificadas: r[tri]?.faltasInjustificadas ?? 0,
-      asistenciaTotal: r[tri]?.asistenciaTotal ?? 0,
-    }));
+    const idxAsist = new Map(
+      asists.map(a => [String(a.estudiante), a])
+    );
 
-    res.status(200).json({
-      ok: true,
-      header: {
-        curso,
-        materia,
-        anioLectivo: anio,
-        trimestre: tri,
-        tutor: curso.profesorTutor,
-        profesor: materia.profesor,
-        totalEstudiantes: data.length,
-      },
-      rows: data,
-    });
-  } catch (err) {
-    console.error("[Reporte trimestral error]", err);
-    next(err);
-  }
-};
+    const rows = califs.map(c => {
+      const estId   = String(c.estudiante?._id || c.estudiante);
+      const estName = c.estudiante?.nombre ?? c.estudiante?.email ?? '—';
+      const nota    = c[trimestre]?.promedioTrimestral ?? null;
 
-/**
- * -----------------------------------------------------
- * 📘 GET /api/reportes/final
- * Parámetros: cursoId, anioLectivoId, estudianteId
- * Devuelve TODAS las materias cursadas con los tres trimestres y promedio final.
- * -----------------------------------------------------
- */
-exports.reporteFinal = async (req, res, next) => {
-  try {
-    const { cursoId, anioLectivoId, estudianteId } = req.query;
+      const a = idxAsist.get(estId);
+      const fj = a?.[trimestre]?.faltasJustificadas   ?? 0;
+      const fi = a?.[trimestre]?.faltasInjustificadas ?? 0;
+      const dl = a?.[trimestre]?.diasLaborados        ?? 0;
+      const asistidos = Math.max(0, Number(dl) - Number(fi));
 
-    if (!isOid(cursoId)) return next(new ErrorResponse("cursoId inválido", 400));
-    if (!isOid(anioLectivoId))
-      return next(new ErrorResponse("anioLectivoId inválido", 400));
-    if (!isOid(estudianteId))
-      return next(new ErrorResponse("estudianteId inválido", 400));
-
-    const curso = await Curso.findById(cursoId)
-      .populate("profesorTutor", "nombre apellido correo")
-      .populate("materias", "nombre")
-      .lean();
-    const estudiante = await Estudiante.findById(estudianteId).lean();
-    const anio = await AnioLectivo.findById(anioLectivoId).lean();
-
-    if (!curso || !estudiante || !anio)
-      return next(new ErrorResponse("Datos de encabezado no encontrados", 404));
-
-    const califs = await Calificacion.find({
-      curso: cursoId,
-      anioLectivo: anioLectivoId,
-      estudiante: estudianteId,
-    })
-      .populate("materia", "nombre profesor")
-      .populate({
-        path: "materia.profesor",
-        select: "nombre apellido",
-      })
-      .lean();
-
-    const rows = califs.map((c) => {
-      const T1 = c?.T1?.promedioTrimestral ?? null;
-      const T2 = c?.T2?.promedioTrimestral ?? null;
-      const T3 = c?.T3?.promedioTrimestral ?? null;
-      const notaFinal = c?.notaPromocion ?? c?.promedioTrimestralAnual ?? null;
       return {
-        materia: c.materia,
-        T1,
-        T2,
-        T3,
-        notaFinal,
+        estudianteId: estId,
+        estudianteNombre: estName,
+        promedioTrimestral: nota,             // 0..100
+        faltasJustificadas: fj,
+        faltasInjustificadas: fi,
+        diasLaborados: dl,
+        asistidos,                            // derivado
       };
     });
 
-    const promedioGeneral =
-      rows.length > 0
-        ? (
-            rows.reduce((acc, r) => acc + (r.notaFinal || 0), 0) / rows.length
-          ).toFixed(2)
-        : 0;
-
-    // Calcular faltas totales y asistencia global
-    const califsAsistencia = await Calificacion.find({
-      curso: cursoId,
-      anioLectivo: anioLectivoId,
-      estudiante: estudianteId,
-    }).lean();
-
-    let T1FJ = 0,
-      T1FI = 0,
-      T2FJ = 0,
-      T2FI = 0,
-      T3FJ = 0,
-      T3FI = 0,
-      diasAsistidos = 0;
-
-    califsAsistencia.forEach((c) => {
-      T1FJ += c?.T1?.faltasJustificadas || 0;
-      T1FI += c?.T1?.faltasInjustificadas || 0;
-      T2FJ += c?.T2?.faltasJustificadas || 0;
-      T2FI += c?.T2?.faltasInjustificadas || 0;
-      T3FJ += c?.T3?.faltasJustificadas || 0;
-      T3FI += c?.T3?.faltasInjustificadas || 0;
-      diasAsistidos +=
-        (c?.T1?.asistenciaTotal || 0) +
-        (c?.T2?.asistenciaTotal || 0) +
-        (c?.T3?.asistenciaTotal || 0);
-    });
-
-    res.status(200).json({
-      ok: true,
-      header: {
-        curso,
-        anioLectivo: anio,
-        estudiante,
-        tutor: curso.profesorTutor,
-        asistencia: {
-          T1FJ,
-          T1FI,
-          T2FJ,
-          T2FI,
-          T3FJ,
-          T3FI,
-          diasAsistidos,
-        },
-      },
-      rows,
-      promedioGeneral,
-    });
+    res.json({ rows });
   } catch (err) {
-    console.error("[Reporte final error]", err);
-    next(err);
+    console.error('[Reportes#reporteTrimestral] error:', err);
+    res.status(500).json({ message: 'Error al generar reporte trimestral' });
+  }
+};
+
+exports.reporteFinalAnual = async (req, res) => {
+  try {
+    const { cursoId, anioLectivoId, materiaId } = req.query;
+    if (!cursoId || !anioLectivoId || !materiaId) {
+      return res.status(400).json({ message: 'Parámetros inválidos' });
+    }
+
+    const califs = await Calificacion.find({ curso: cursoId, anioLectivo: anioLectivoId, materia: materiaId })
+      .populate('estudiante', 'nombre email')
+      .lean();
+
+    const asists = await Asistencia.find({ curso: cursoId, anioLectivo: anioLectivoId, materia: materiaId }).lean();
+    const idxAsist = new Map(asists.map(a => [String(a.estudiante), a]));
+
+    const rows = califs.map(c => {
+      const estId   = String(c.estudiante?._id || c.estudiante);
+      const estName = c.estudiante?.nombre ?? c.estudiante?.email ?? '—';
+
+      const notas = [c.T1?.promedioTrimestral, c.T2?.promedioTrimestral, c.T3?.promedioTrimestral]
+        .filter(n => typeof n === 'number');
+      const promFinal = notas.length
+        ? Math.round((notas.reduce((a,b)=>a+b,0) / notas.length) * 100) / 100
+        : null;
+
+      // Sumar faltas del año (opcional)
+      const a = idxAsist.get(estId);
+      const sumFJ = (a?.T1?.faltasJustificadas ?? 0) + (a?.T2?.faltasJustificadas ?? 0) + (a?.T3?.faltasJustificadas ?? 0);
+      const sumFI = (a?.T1?.faltasInjustificadas ?? 0) + (a?.T2?.faltasInjustificadas ?? 0) + (a?.T3?.faltasInjustificadas ?? 0);
+      const sumDL = (a?.T1?.diasLaborados ?? 0) + (a?.T2?.diasLaborados ?? 0) + (a?.T3?.diasLaborados ?? 0);
+      const sumAsistidos = Math.max(0, sumDL - sumFI);
+
+      return {
+        estudianteId: estId,
+        estudianteNombre: estName,
+        T1: c.T1?.promedioTrimestral ?? null,
+        T2: c.T2?.promedioTrimestral ?? null,
+        T3: c.T3?.promedioTrimestral ?? null,
+        promedioFinal: promFinal,   // 0..100
+        faltasJustificadas: sumFJ,
+        faltasInjustificadas: sumFI,
+        diasLaborados: sumDL,
+        asistidos: sumAsistidos,
+      };
+    });
+
+    res.json({ rows });
+  } catch (err) {
+    console.error('[Reportes#reporteFinalAnual] error:', err);
+    res.status(500).json({ message: 'Error al generar reporte final' });
   }
 };

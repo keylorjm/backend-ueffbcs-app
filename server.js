@@ -36,7 +36,7 @@ app.use('/api/usuarios', require('./routes/usuarios'));
 app.use('/api/estudiantes', require('./routes/estudiantes'));
 app.use('/api/cursos', require('./routes/cursos'));
 app.use('/api/calificaciones', require('./routes/calificaciones'));
-
+app.use('/api/asistencias', require('./routes/asistencias')); 
 app.use('/api/materias', require('./routes/materia')); 
 app.use('/api/aniolectivo', require('./routes/anios-lectivos'));
 app.use("/api/profesor", require("./routes/profesor"));
