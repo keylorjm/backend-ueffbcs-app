@@ -88,6 +88,80 @@ exports.listFaltas = async (req, res) => {
   }
 };
 
+// GET /api/asistencias/resumen?cursoId&anioLectivoId&estudianteId&trimestre
+exports.resumenTrimestre = async (req, res) => {
+  try {
+    const { cursoId, anioLectivoId, estudianteId, trimestre } = req.query;
+
+    if (!cursoId || !anioLectivoId || !estudianteId || !trimestre) {
+      return res
+        .status(400)
+        .json({ message: 'Parámetros requeridos: cursoId, anioLectivoId, estudianteId, trimestre' });
+    }
+
+    // Normaliza trimestre (por si alguna vez llega 1/2/3)
+    const normTri = (v) => (v === '1' || v === 1 ? 'T1' : v === '2' || v === 2 ? 'T2' : v === '3' || v === 3 ? 'T3' : String(v));
+
+    const cursoOID = oid(cursoId);
+    const anioOID = oid(anioLectivoId);
+    const estOID = oid(estudianteId);
+    const tri = normTri(trimestre);
+
+    if (!cursoOID || !anioOID || !estOID) {
+      return res.status(400).json({ message: 'IDs inválidos' });
+    }
+
+    // 1) Sumar faltas del estudiante en TODAS las materias del curso y trimestre
+    const faltasAgg = await AsistenciaFalta.aggregate([
+      {
+        $match: {
+          curso: cursoOID,
+          anioLectivo: anioOID,
+          estudiante: estOID,
+          trimestre: tri,
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          fj: { $sum: { $ifNull: ['$faltasJustificadas', 0] } },
+          fi: { $sum: { $ifNull: ['$faltasInjustificadas', 0] } },
+        },
+      },
+    ]);
+
+    const faltasJustificadas = faltasAgg[0]?.fj ?? 0;
+    const faltasInjustificadas = faltasAgg[0]?.fi ?? 0;
+
+    // 2) Sumar días laborables de TODAS las materias del curso y trimestre
+    const labAgg = await AsistenciaLaborable.aggregate([
+      {
+        $match: {
+          curso: cursoOID,
+          anioLectivo: anioOID,
+          trimestre: tri,
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $ifNull: ['$diasLaborables', 0] } },
+        },
+      },
+    ]);
+
+    const diasLaborables = labAgg[0]?.total ?? 0;
+
+    return res.json({ faltasJustificadas, faltasInjustificadas, diasLaborables });
+  } catch (err) {
+    console.error('[asistencias.resumen] error:', err);
+    return res
+      .status(500)
+      .json({ message: 'Error al obtener resumen de asistencia', error: err?.message });
+  }
+};
+
+
 // POST /api/asistencias/bulk-faltas {cursoId, anioLectivoId, materiaId, trimestre, rows:[{estudianteId,faltasJustificadas, faltasInjustificadas}]}
 exports.bulkFaltas = async (req, res) => {
   try {

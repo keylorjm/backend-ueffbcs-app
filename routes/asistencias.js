@@ -15,5 +15,6 @@ router.post('/laborables', ctrl.setLaborables);
 // Faltas por estudiante
 router.get('/', ctrl.listFaltas);
 router.post('/bulk-faltas', ctrl.bulkFaltas);
+router.get('/resumen', ctrl.resumenTrimestre);
 
 module.exports = router;
