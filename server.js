@@ -41,6 +41,8 @@ app.use('/api/materias', require('./routes/materia'));
 app.use('/api/aniolectivo', require('./routes/anios-lectivos'));
 app.use("/api/profesor", require("./routes/profesor"));
 app.use('/api/reportes', require('./routes/reportes'));
+app.use('/api/matriculas', require('./routes/matriculas'));
+app.use("/api/promocion", require("./routes/promocion"));
 
 
 const errorHandler = require('./middleware/error');

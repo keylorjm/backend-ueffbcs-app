@@ -1,4 +1,4 @@
-// controllers/controladorAnioLectivo.js
+// controllers/controladorAnioLectivo.js 
 const mongoose = require('mongoose');
 const AnioLectivo = require('../models/AnioLectivo');
 const ErrorResponse = require('../utils/errorResponse');
@@ -10,7 +10,8 @@ const ErrorResponse = require('../utils/errorResponse');
  *   fechaInicio: Date (requerido),
  *   fechaFin: Date (requerido),
  *   actual: Boolean (default: false),
- *   activo: Boolean (default: true)
+ *   activo: Boolean (default: true),
+ *   orden:  Number (opcional, usado para secuencia de años)
  * }
  */
 
@@ -21,7 +22,11 @@ exports.listar = async (req, res, next) => {
     const filter = {};
     if (AnioLectivo.schema.path('activo')) filter.activo = true;
 
-    const rows = await AnioLectivo.find(filter).sort({ createdAt: -1 }).lean();
+    // 👇 Ordenamos por "orden" ascendente y luego por fechaInicio
+    const rows = await AnioLectivo.find(filter)
+      .sort({ orden: 1, fechaInicio: 1 })
+      .lean();
+
     res.json({ ok: true, data: rows });
   } catch (err) {
     next(err);
@@ -62,12 +67,24 @@ exports.obtenerActual = async (req, res, next) => {
 // ===================== CREAR =====================
 exports.crear = async (req, res, next) => {
   try {
+    const { nombre, fechaInicio, fechaFin, actual, activo, orden } = req.body || {};
+
     const payload = {
-      nombre: req.body?.nombre,
-      fechaInicio: req.body?.fechaInicio,
-      fechaFin: req.body?.fechaFin,
-      actual: !!req.body?.actual,
+      nombre,
+      fechaInicio,
+      fechaFin,
+      actual: !!actual,
     };
+
+    // activo: si viene en el body lo usamos; si no, por defecto true
+    if (AnioLectivo.schema.path('activo')) {
+      payload.activo = (typeof activo === 'boolean') ? activo : true;
+    }
+
+    // 🔹 orden: si viene, lo convertimos a número; si no, lo dejamos undefined
+    if (orden !== undefined && orden !== null && orden !== '') {
+      payload.orden = Number(orden) || 0;
+    }
 
     // Validaciones básicas
     if (!payload.nombre) return next(new ErrorResponse('El nombre es obligatorio', 400));
@@ -98,11 +115,23 @@ exports.actualizar = async (req, res, next) => {
       return next(new ErrorResponse('ID inválido', 400));
     }
 
+    const { nombre, fechaInicio, fechaFin, activo, orden } = req.body || {};
+
     const body = {
-      nombre: req.body?.nombre,
-      fechaInicio: req.body?.fechaInicio,
-      fechaFin: req.body?.fechaFin,
+      nombre,
+      fechaInicio,
+      fechaFin,
     };
+
+    // activo (si tu schema lo tiene)
+    if (AnioLectivo.schema.path('activo') && typeof activo === 'boolean') {
+      body.activo = activo;
+    }
+
+    // 🔹 orden (si viene del front)
+    if (orden !== undefined && orden !== null && orden !== '') {
+      body.orden = Number(orden) || 0;
+    }
 
     // Limpia undefineds
     Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);

@@ -21,9 +21,24 @@ const MateriaAsignadaSchema = new Schema(
 const CursoSchema = new Schema(
   {
     nombre: { type: String, required: [true, 'El nombre es obligatorio'], trim: true },
+
+    // 🔹 Año lectivo al que pertenece el curso
     anioLectivo: { type: Schema.Types.ObjectId, ref: 'AnioLectivo', required: true },
+
+    // 🔹 Tutor principal
     profesorTutor: { type: Schema.Types.ObjectId, ref: 'Usuario', required: true },
+
+    // 🔹 Orden académico (1=1ro, 2=2do, etc.)
+    orden: {
+      type: Number,
+      min: [1, 'El orden debe ser mínimo 1'],
+      default: 1,
+    },
+
+    // 🔹 Estudiantes inscritos en este curso
     estudiantes: [{ type: Schema.Types.ObjectId, ref: 'Estudiante', default: [] }],
+
+    // 🔹 Materias y profesor responsable
     materias: {
       type: [MateriaAsignadaSchema],
       validate: {
@@ -33,9 +48,10 @@ const CursoSchema = new Schema(
             if (!it || !it.materia || !it.profesor) return false;
           }
           const set = new Set(arr.map((x) => String(x.materia)));
-          return set.size === arr.length; // sin materias duplicadas
+          return set.size === arr.length;
         },
-        message: 'Cada materia debe tener materia y profesor válidos, y no puede repetirse la misma materia.',
+        message:
+          'Cada materia debe tener materia y profesor válidos, y no puede repetirse la misma materia.',
       },
       default: [],
     },
@@ -43,7 +59,6 @@ const CursoSchema = new Schema(
   { timestamps: true }
 );
 
-// Unicidad de nombre dentro del año lectivo
 CursoSchema.index({ anioLectivo: 1, nombre: 1 }, { unique: true });
 
 module.exports = mongoose.model('Curso', CursoSchema);
